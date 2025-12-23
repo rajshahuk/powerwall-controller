@@ -1,0 +1,347 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Powerwall Controller{% endblock %}
+
+{% block content %}
+<div id="not-configured" class="alert alert-warning hidden">
+    Powerwall is not configured. <a href="/configuration">Go to Configuration</a> to set up your Powerwall connection.
+</div>
+
+<!-- Current State -->
+<div class="card">
+    <div class="card-header">
+        Current State
+        <div class="btn-group">
+            <button id="btn-start-monitoring" class="btn btn-success" onclick="startMonitoring()">Start Monitoring</button>
+            <button id="btn-stop-monitoring" class="btn btn-danger hidden" onclick="stopMonitoring()">Stop Monitoring</button>
+            <button id="btn-start-automation" class="btn btn-success hidden" onclick="startAutomation()">Start Automation</button>
+            <button id="btn-stop-automation" class="btn btn-danger hidden" onclick="stopAutomation()">Stop Automation</button>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="power-flow">
+            <div class="power-node solar">
+                <div class="icon">&#9728;</div>
+                <div class="value" id="solar-power">-- kW</div>
+                <div class="label">Solar</div>
+            </div>
+            <div class="power-node battery">
+                <div class="icon">&#9889;</div>
+                <div class="value" id="battery-power">-- kW</div>
+                <div class="label">Battery <span id="battery-percent">--%</span></div>
+            </div>
+            <div class="power-node grid">
+                <div class="icon">&#9951;</div>
+                <div class="value" id="grid-power">-- kW</div>
+                <div class="label">Grid</div>
+            </div>
+            <div class="power-node home">
+                <div class="icon">&#127968;</div>
+                <div class="value" id="home-power">-- kW</div>
+                <div class="label">Home</div>
+            </div>
+        </div>
+
+        <div class="grid grid-4 mt-2">
+            <div class="metric">
+                <div class="metric-value" id="backup-reserve">--%</div>
+                <div class="metric-label">Backup Reserve</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value" id="grid-status">--</div>
+                <div class="metric-label">Grid Status</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value" id="battery-capacity">-- kWh</div>
+                <div class="metric-label">Battery Capacity</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value" id="last-update">--</div>
+                <div class="metric-label">Last Update</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Real-time Charts -->
+<div class="grid grid-2">
+    <div class="card">
+        <div class="card-header">Power Flow (Last 5 minutes)</div>
+        <div class="card-body">
+            <div class="chart-container">
+                <canvas id="power-chart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Battery Level (Last 5 minutes)</div>
+        <div class="card-body">
+            <div class="chart-container">
+                <canvas id="battery-chart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Manual Control -->
+<div class="card">
+    <div class="card-header">Manual Control</div>
+    <div class="card-body">
+        <div class="form-row">
+            <div class="form-group">
+                <label class="form-label">Set Backup Reserve</label>
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                    <input type="range" id="reserve-slider" min="0" max="100" value="20" style="flex: 1;">
+                    <span id="reserve-value" style="min-width: 50px;">20%</span>
+                    <button class="btn btn-primary" onclick="setBackupReserve()">Set</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let powerChart, batteryChart;
+let metricsInterval;
+
+document.addEventListener('DOMContentLoaded', async () => {
+    // Initialize charts
+    powerChart = createRealtimeChart(
+        document.getElementById('power-chart').getContext('2d'),
+        [
+            { label: 'Solar', color: chartColors.solar },
+            { label: 'Battery', color: chartColors.battery },
+            { label: 'Grid', color: chartColors.grid },
+            { label: 'Home', color: chartColors.home },
+        ]
+    );
+
+    batteryChart = createRealtimeChart(
+        document.getElementById('battery-chart').getContext('2d'),
+        [
+            { label: 'Battery %', color: chartColors.battery, unit: '%' },
+            { label: 'Reserve %', color: chartColors.reserve, unit: '%' },
+        ],
+        { yMin: 0, yMax: 100 }
+    );
+
+    // Setup slider
+    const slider = document.getElementById('reserve-slider');
+    slider.addEventListener('input', () => {
+        document.getElementById('reserve-value').textContent = slider.value + '%';
+    });
+
+    // Load current backup reserve value
+    await loadCurrentReserve();
+
+    // Load any available historical data first
+    await loadHistoricalData();
+
+    // Check status and start updates
+    await checkStatus();
+});
+
+async function checkStatus() {
+    const status = await updateGlobalStatus();
+    if (!status) return;
+
+    const notConfigured = document.getElementById('not-configured');
+    const btnStartMon = document.getElementById('btn-start-monitoring');
+    const btnStopMon = document.getElementById('btn-stop-monitoring');
+    const btnStartAuto = document.getElementById('btn-start-automation');
+    const btnStopAuto = document.getElementById('btn-stop-automation');
+
+    if (!status.configured) {
+        notConfigured.classList.remove('hidden');
+        btnStartMon.disabled = true;
+    } else {
+        notConfigured.classList.add('hidden');
+        btnStartMon.disabled = false;
+    }
+
+    if (status.monitoring_running) {
+        btnStartMon.classList.add('hidden');
+        btnStopMon.classList.remove('hidden');
+        startMetricsPolling();
+
+        // Show automation buttons only when monitoring is running
+        if (status.automation_running) {
+            btnStartAuto.classList.add('hidden');
+            btnStopAuto.classList.remove('hidden');
+        } else {
+            btnStartAuto.classList.remove('hidden');
+            btnStopAuto.classList.add('hidden');
+        }
+    } else {
+        btnStartMon.classList.remove('hidden');
+        btnStopMon.classList.add('hidden');
+        btnStartAuto.classList.add('hidden');
+        btnStopAuto.classList.add('hidden');
+        stopMetricsPolling();
+    }
+}
+
+async function startMonitoring() {
+    try {
+        await api.post('/api/monitoring/start');
+        await checkStatus();
+    } catch (error) {
+        showNotification('Failed to start monitoring: ' + error.message, 'danger');
+    }
+}
+
+async function stopMonitoring() {
+    try {
+        await api.post('/api/monitoring/stop');
+        await checkStatus();
+    } catch (error) {
+        showNotification('Failed to stop monitoring: ' + error.message, 'danger');
+    }
+}
+
+async function startAutomation() {
+    try {
+        await api.post('/api/automation/start');
+        await checkStatus();
+    } catch (error) {
+        showNotification('Failed to start automation: ' + error.message, 'danger');
+    }
+}
+
+async function stopAutomation() {
+    try {
+        await api.post('/api/automation/stop');
+        await checkStatus();
+    } catch (error) {
+        showNotification('Failed to stop automation: ' + error.message, 'danger');
+    }
+}
+
+async function startMetricsPolling() {
+    if (metricsInterval) return;
+
+    // Start live polling (historical data already loaded on page init)
+    updateMetrics();
+    metricsInterval = setInterval(updateMetrics, 5000);
+}
+
+async function loadCurrentReserve() {
+    try {
+        // Try to get current metrics if monitoring is running
+        const metrics = await api.get('/api/monitoring/current');
+        if (metrics && metrics.backup_reserve !== undefined) {
+            const reserve = Math.round(metrics.backup_reserve);
+            document.getElementById('reserve-slider').value = reserve;
+            document.getElementById('reserve-value').textContent = reserve + '%';
+        }
+    } catch (error) {
+        // Monitoring not running, try to get from most recent historical data
+        try {
+            const history = await api.get('/api/history/metrics?hours=1');
+            if (history && history.length > 0) {
+                const latest = history[history.length - 1];
+                const reserve = Math.round(latest.backup_reserve);
+                document.getElementById('reserve-slider').value = reserve;
+                document.getElementById('reserve-value').textContent = reserve + '%';
+            }
+        } catch (e) {
+            console.log('Could not load current reserve value');
+        }
+    }
+}
+
+async function loadHistoricalData() {
+    try {
+        // Fetch last 5 minutes of historical data from storage
+        const metrics = await api.get('/api/history/metrics?hours=0.0833'); // ~5 minutes
+
+        if (metrics && metrics.length > 0) {
+            // Clear existing chart data
+            powerChart.data.labels = [];
+            powerChart.data.datasets.forEach(ds => ds.data = []);
+            batteryChart.data.labels = [];
+            batteryChart.data.datasets.forEach(ds => ds.data = []);
+
+            // Populate charts with historical data
+            metrics.forEach(m => {
+                const time = formatTime(m.timestamp);
+
+                powerChart.data.labels.push(time);
+                powerChart.data.datasets[0].data.push(m.solar_power);
+                powerChart.data.datasets[1].data.push(m.battery_power);
+                powerChart.data.datasets[2].data.push(m.grid_power);
+                powerChart.data.datasets[3].data.push(m.home_power);
+
+                batteryChart.data.labels.push(time);
+                batteryChart.data.datasets[0].data.push(m.battery_percentage);
+                batteryChart.data.datasets[1].data.push(m.backup_reserve);
+            });
+
+            powerChart.update();
+            batteryChart.update();
+
+            console.log(`Loaded ${metrics.length} historical data points`);
+        }
+    } catch (error) {
+        console.log('No historical data available:', error.message);
+    }
+}
+
+function stopMetricsPolling() {
+    if (metricsInterval) {
+        clearInterval(metricsInterval);
+        metricsInterval = null;
+    }
+}
+
+async function updateMetrics() {
+    try {
+        const metrics = await api.get('/api/monitoring/current');
+
+        // Update power flow display
+        document.getElementById('solar-power').textContent = formatPower(metrics.solar_power);
+        document.getElementById('battery-power').textContent = formatPower(metrics.battery_power);
+        document.getElementById('grid-power').textContent = formatPower(metrics.grid_power);
+        document.getElementById('home-power').textContent = formatPower(metrics.home_power);
+        document.getElementById('battery-percent').textContent = formatPercent(metrics.battery_percentage);
+        document.getElementById('backup-reserve').textContent = formatPercent(metrics.backup_reserve);
+        document.getElementById('grid-status').textContent = metrics.grid_status;
+        document.getElementById('battery-capacity').textContent = metrics.battery_capacity.toFixed(1) + ' kWh';
+        document.getElementById('last-update').textContent = formatTime(metrics.timestamp);
+
+        // Update slider to current reserve
+        document.getElementById('reserve-slider').value = metrics.backup_reserve;
+        document.getElementById('reserve-value').textContent = formatPercent(metrics.backup_reserve);
+
+        // Update charts
+        const time = formatTime(metrics.timestamp);
+        updateChart(powerChart, time, [
+            metrics.solar_power,
+            metrics.battery_power,
+            metrics.grid_power,
+            metrics.home_power,
+        ]);
+        updateChart(batteryChart, time, [
+            metrics.battery_percentage,
+            metrics.backup_reserve,
+        ]);
+
+    } catch (error) {
+        console.error('Failed to update metrics:', error);
+    }
+}
+
+async function setBackupReserve() {
+    const value = parseFloat(document.getElementById('reserve-slider').value);
+    try {
+        await api.post('/api/powerwall/backup-reserve', { percentage: value });
+        showNotification(`Backup reserve set to ${value}%`, 'success');
+    } catch (error) {
+        showNotification('Failed to set backup reserve: ' + error.message, 'danger');
+    }
+}
+</script>
+{% endblock %}

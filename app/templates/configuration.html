@@ -1,0 +1,316 @@
+{% extends "base.html" %}
+
+{% block title %}Configuration - Powerwall Controller{% endblock %}
+
+{% block content %}
+<div class="grid grid-2">
+    <!-- Connection Settings -->
+    <div class="card">
+        <div class="card-header">Powerwall Connection</div>
+        <div class="card-body">
+            <form id="config-form" onsubmit="saveConfig(event)">
+                <div class="form-group">
+                    <label class="form-label" for="mode">Connection Mode</label>
+                    <select class="form-control" id="mode" onchange="updateFieldVisibility()">
+                        <option value="local">Local (Powerwall 2/+) - Direct LAN access</option>
+                        <option value="fleetapi">FleetAPI (Cloud) - Official Tesla API</option>
+                        <option value="cloud">Cloud Mode - Tesla Owners API</option>
+                        <option value="tedapi">TEDAPI (Powerwall 3) - Local WiFi access</option>
+                    </select>
+                </div>
+
+                <!-- Mode descriptions -->
+                <div id="mode-desc-local" class="alert alert-info mb-2 mode-desc">
+                    <strong>Local Mode:</strong> Direct connection to Powerwall 2 or Powerwall+ gateway on your local network.
+                    Requires the gateway IP, your Tesla account email, and password.
+                </div>
+                <div id="mode-desc-fleetapi" class="alert alert-info mb-2 mode-desc hidden">
+                    <strong>FleetAPI Mode:</strong> Official Tesla API. Requires initial setup via command line:
+                    <code>python -m pypowerwall fleetapi</code>. After setup, only email is needed.
+                </div>
+                <div id="mode-desc-cloud" class="alert alert-info mb-2 mode-desc hidden">
+                    <strong>Cloud Mode:</strong> Unofficial Tesla Owners API. Requires initial setup via command line:
+                    <code>python -m pypowerwall setup</code>. After setup, only email is needed.
+                </div>
+                <div id="mode-desc-tedapi" class="alert alert-info mb-2 mode-desc hidden">
+                    <strong>TEDAPI Mode:</strong> Local access for Powerwall 3. Your machine must be connected to the
+                    Powerwall's WiFi network (TeslaPW_xxx). Requires the Gateway WiFi password from the QR sticker.
+                </div>
+
+                <!-- Host field (Local & TEDAPI) -->
+                <div class="form-group" id="field-host">
+                    <label class="form-label" for="host">Powerwall Host IP</label>
+                    <input type="text" class="form-control" id="host" placeholder="192.168.1.100">
+                    <small class="text-muted" id="host-hint">IP address of your Powerwall gateway</small>
+                </div>
+
+                <!-- Gateway WiFi Password (TEDAPI only) -->
+                <div class="form-group hidden" id="field-gw-password">
+                    <label class="form-label" for="gw-password">Gateway WiFi Password</label>
+                    <input type="password" class="form-control" id="gw-password" placeholder="From QR sticker on Powerwall">
+                    <small class="text-muted">Found on QR sticker inside Powerwall access panel (case-sensitive)</small>
+                </div>
+
+                <!-- Tesla credentials (Local, FleetAPI, Cloud) -->
+                <div id="field-tesla-creds">
+                    <div class="form-group">
+                        <label class="form-label" for="email">Tesla Account Email</label>
+                        <input type="email" class="form-control" id="email" placeholder="your-email@example.com">
+                    </div>
+                    <div class="form-group" id="field-password">
+                        <label class="form-label" for="password">Tesla Account Password</label>
+                        <input type="password" class="form-control" id="password" placeholder="Enter password">
+                        <small class="text-muted">Leave blank to keep existing</small>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="timezone">Timezone</label>
+                    <select class="form-control" id="timezone">
+                        <option value="America/Los_Angeles">America/Los_Angeles (Pacific)</option>
+                        <option value="America/Denver">America/Denver (Mountain)</option>
+                        <option value="America/Chicago">America/Chicago (Central)</option>
+                        <option value="America/New_York">America/New_York (Eastern)</option>
+                        <option value="Europe/London">Europe/London</option>
+                        <option value="Europe/Paris">Europe/Paris</option>
+                        <option value="Australia/Sydney">Australia/Sydney</option>
+                    </select>
+                </div>
+
+                <div class="btn-group">
+                    <button type="submit" class="btn btn-primary">Save Configuration</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Connection Test -->
+    <div class="card">
+        <div class="card-header">Connectivity Test</div>
+        <div class="card-body">
+            <p class="text-muted mb-2">Test your connection to the Powerwall with detailed diagnostics.</p>
+
+            <button id="btn-test" class="btn btn-primary" onclick="runConnectionTest()">
+                Run Connection Test
+            </button>
+
+            <div id="test-results" class="mt-2 hidden">
+                <h4 class="mb-1">Test Results</h4>
+                <ul id="test-steps" class="diagnostic-steps">
+                </ul>
+                <div id="test-summary" class="mt-1"></div>
+            </div>
+
+            <div id="test-loading" class="mt-2 hidden">
+                <span class="spinner"></span> Running tests...
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Current Settings -->
+<div class="card">
+    <div class="card-header">Current Settings</div>
+    <div class="card-body">
+        <table class="table">
+            <tbody>
+                <tr>
+                    <td><strong>Connection Mode</strong></td>
+                    <td id="setting-mode">--</td>
+                </tr>
+                <tr>
+                    <td><strong>Server Port</strong></td>
+                    <td id="setting-port">--</td>
+                </tr>
+                <tr>
+                    <td><strong>Monitoring Interval</strong></td>
+                    <td id="setting-interval">-- seconds</td>
+                </tr>
+                <tr>
+                    <td><strong>Automation Cooldown</strong></td>
+                    <td id="setting-cooldown">-- seconds</td>
+                </tr>
+                <tr>
+                    <td><strong>Average Window</strong></td>
+                    <td id="setting-window">-- seconds</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Setup Instructions -->
+<div class="card">
+    <div class="card-header">Setup Instructions for Cloud Modes</div>
+    <div class="card-body">
+        <h4>FleetAPI Setup (Official Tesla API)</h4>
+        <p class="text-muted">Requires a Tesla Developer account and domain verification.</p>
+        <pre style="background: #f5f5f5; padding: 1rem; border-radius: 4px;">source venv/bin/activate
+python -m pypowerwall fleetapi</pre>
+
+        <h4 class="mt-2">Cloud Mode Setup (Tesla Owners API)</h4>
+        <p class="text-muted">Uses unofficial API, easier to set up but may be less stable.</p>
+        <pre style="background: #f5f5f5; padding: 1rem; border-radius: 4px;">source venv/bin/activate
+python -m pypowerwall setup</pre>
+
+        <p class="text-muted mt-2">After running the setup command, credentials are cached and you only need to enter your email in the configuration above.</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', async () => {
+    await loadConfig();
+    updateFieldVisibility();
+});
+
+function updateFieldVisibility() {
+    const mode = document.getElementById('mode').value;
+
+    // Hide all mode descriptions
+    document.querySelectorAll('.mode-desc').forEach(el => el.classList.add('hidden'));
+    document.getElementById('mode-desc-' + mode).classList.remove('hidden');
+
+    // Field visibility based on mode
+    const hostField = document.getElementById('field-host');
+    const gwPasswordField = document.getElementById('field-gw-password');
+    const teslaCredsField = document.getElementById('field-tesla-creds');
+    const passwordField = document.getElementById('field-password');
+    const hostHint = document.getElementById('host-hint');
+
+    if (mode === 'local') {
+        hostField.classList.remove('hidden');
+        gwPasswordField.classList.add('hidden');
+        teslaCredsField.classList.remove('hidden');
+        passwordField.classList.remove('hidden');
+        hostHint.textContent = 'IP address of your Powerwall gateway';
+    } else if (mode === 'fleetapi' || mode === 'cloud') {
+        hostField.classList.add('hidden');
+        gwPasswordField.classList.add('hidden');
+        teslaCredsField.classList.remove('hidden');
+        passwordField.classList.add('hidden');
+    } else if (mode === 'tedapi') {
+        hostField.classList.remove('hidden');
+        gwPasswordField.classList.remove('hidden');
+        teslaCredsField.classList.add('hidden');
+        document.getElementById('host').placeholder = '192.168.91.1';
+        hostHint.textContent = 'Usually 192.168.91.1 (TEDAPI endpoint)';
+    }
+}
+
+async function loadConfig() {
+    try {
+        const config = await api.get('/api/config');
+
+        document.getElementById('mode').value = config.mode || 'local';
+        document.getElementById('host').value = config.host || '';
+        document.getElementById('email').value = config.email || '';
+
+        if (config.timezone) {
+            document.getElementById('timezone').value = config.timezone;
+        }
+
+        // Mode display names
+        const modeNames = {
+            'local': 'Local (PW2/PW+)',
+            'fleetapi': 'FleetAPI (Cloud)',
+            'cloud': 'Cloud Mode',
+            'tedapi': 'TEDAPI (PW3 Local)'
+        };
+
+        document.getElementById('setting-mode').textContent = modeNames[config.mode] || config.mode;
+        document.getElementById('setting-port').textContent = config.port;
+        document.getElementById('setting-interval').textContent = config.monitoring_interval + ' seconds';
+        document.getElementById('setting-cooldown').textContent = config.automation_cooldown + ' seconds';
+        document.getElementById('setting-window').textContent = config.automation_average_window + ' seconds';
+
+        if (config.has_password) {
+            document.getElementById('password').placeholder = 'Password saved (leave blank to keep)';
+        }
+        if (config.has_gw_password) {
+            document.getElementById('gw-password').placeholder = 'Gateway password saved (leave blank to keep)';
+        }
+
+        updateFieldVisibility();
+    } catch (error) {
+        showNotification('Failed to load configuration', 'danger');
+    }
+}
+
+async function saveConfig(event) {
+    event.preventDefault();
+
+    const mode = document.getElementById('mode').value;
+
+    const data = {
+        mode: mode,
+        host: document.getElementById('host').value,
+        email: document.getElementById('email').value,
+        timezone: document.getElementById('timezone').value,
+    };
+
+    const password = document.getElementById('password').value;
+    if (password) {
+        data.password = password;
+    }
+
+    const gwPassword = document.getElementById('gw-password').value;
+    if (gwPassword) {
+        data.gw_password = gwPassword;
+    }
+
+    try {
+        await api.post('/api/config', data);
+        showNotification('Configuration saved successfully', 'success');
+        document.getElementById('password').value = '';
+        document.getElementById('gw-password').value = '';
+        await loadConfig();
+    } catch (error) {
+        showNotification('Failed to save configuration: ' + error.message, 'danger');
+    }
+}
+
+async function runConnectionTest() {
+    const btnTest = document.getElementById('btn-test');
+    const loading = document.getElementById('test-loading');
+    const results = document.getElementById('test-results');
+    const stepsContainer = document.getElementById('test-steps');
+    const summary = document.getElementById('test-summary');
+
+    btnTest.disabled = true;
+    loading.classList.remove('hidden');
+    results.classList.add('hidden');
+
+    try {
+        const result = await api.post('/api/connection/test');
+
+        stepsContainer.innerHTML = '';
+        result.steps.forEach(step => {
+            const li = document.createElement('li');
+            li.className = 'diagnostic-step ' + (step.success ? 'success' : 'failure');
+            li.innerHTML = `
+                <span class="icon">${step.success ? '&#10004;' : '&#10008;'}</span>
+                <span class="name"><strong>${step.name}</strong></span>
+                <span class="message">${step.message}</span>
+            `;
+            stepsContainer.appendChild(li);
+        });
+
+        if (result.success) {
+            summary.innerHTML = '<div class="alert alert-success">All tests passed! Connection is working properly.</div>';
+        } else {
+            summary.innerHTML = `<div class="alert alert-danger">Connection test failed: ${result.error || 'Unknown error'}</div>`;
+        }
+
+        results.classList.remove('hidden');
+    } catch (error) {
+        summary.innerHTML = `<div class="alert alert-danger">Test failed: ${error.message}</div>`;
+        results.classList.remove('hidden');
+    } finally {
+        btnTest.disabled = false;
+        loading.classList.add('hidden');
+    }
+}
+</script>
+{% endblock %}

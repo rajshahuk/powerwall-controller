@@ -1,0 +1,317 @@
+{% extends "base.html" %}
+
+{% block title %}Automation - Powerwall Controller{% endblock %}
+
+{% block content %}
+<!-- Automation Control -->
+<div class="card">
+    <div class="card-header">
+        Automation Control
+        <div class="btn-group">
+            <button id="btn-start-automation" class="btn btn-success" onclick="startAutomation()">Start Automation</button>
+            <button id="btn-stop-automation" class="btn btn-danger hidden" onclick="stopAutomation()">Stop Automation</button>
+        </div>
+    </div>
+    <div class="card-body">
+        <div id="automation-status">
+            <p id="status-message" class="text-muted">Loading status...</p>
+        </div>
+        <div class="alert alert-info mt-1">
+            <strong>How it works:</strong> Rules are evaluated in order from top to bottom. The first matching rule will be executed.
+            Changes to backup reserve are made when the average home power over the last 20 seconds meets the rule condition.
+            A 30-second cooldown prevents rapid changes.
+        </div>
+    </div>
+</div>
+
+<!-- Rules Management -->
+<div class="card">
+    <div class="card-header">
+        Automation Rules
+        <button class="btn btn-primary" onclick="showAddRuleModal()">Add Rule</button>
+    </div>
+    <div class="card-body">
+        <div id="no-rules" class="alert alert-warning hidden">
+            No rules configured. Add a rule to get started.
+        </div>
+        <ul id="rules-list" class="rules-list">
+            <!-- Rules will be populated here -->
+        </ul>
+        <p class="text-muted mt-1">
+            <small>Drag rules to reorder. Rules are evaluated from top to bottom.</small>
+        </p>
+    </div>
+</div>
+
+<!-- Add/Edit Rule Modal Template -->
+<template id="rule-modal-template">
+    <form id="rule-form">
+        <div class="form-group">
+            <label class="form-label" for="rule-name">Rule Name</label>
+            <input type="text" class="form-control" id="rule-name" required placeholder="e.g., High Usage Alert">
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label class="form-label">Condition</label>
+                <div style="display: flex; gap: 0.5rem;">
+                    <span style="line-height: 2.5;">If home power</span>
+                    <select class="form-control" id="rule-operator" style="width: 80px;">
+                        <option value=">">&gt;</option>
+                        <option value="<">&lt;</option>
+                        <option value=">=">&ge;</option>
+                        <option value="<=">&le;</option>
+                    </select>
+                    <input type="number" class="form-control" id="rule-threshold" step="0.1" min="0" required style="width: 100px;">
+                    <span style="line-height: 2.5;">kW</span>
+                </div>
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="form-label" for="rule-reserve">Set Backup Reserve To</label>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+                <input type="range" id="rule-reserve-slider" min="0" max="100" value="50" style="flex: 1;">
+                <input type="number" class="form-control" id="rule-reserve" min="0" max="100" value="50" style="width: 80px;">
+                <span>%</span>
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">
+                <input type="checkbox" id="rule-enabled" checked>
+                Rule enabled
+            </label>
+        </div>
+    </form>
+</template>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentRules = [];
+let editingRuleId = null;
+
+document.addEventListener('DOMContentLoaded', async () => {
+    await loadAutomationStatus();
+    await loadRules();
+});
+
+async function loadAutomationStatus() {
+    try {
+        const status = await api.get('/api/automation/status');
+        const btnStart = document.getElementById('btn-start-automation');
+        const btnStop = document.getElementById('btn-stop-automation');
+        const statusMessage = document.getElementById('status-message');
+
+        if (status.running) {
+            btnStart.classList.add('hidden');
+            btnStop.classList.remove('hidden');
+            statusMessage.innerHTML = '<span class="badge badge-success">Running</span> Automation is active with ' + status.rules_count + ' rule(s).';
+        } else {
+            btnStart.classList.remove('hidden');
+            btnStop.classList.add('hidden');
+            statusMessage.innerHTML = '<span class="badge badge-secondary">Stopped</span> Automation is not running.';
+        }
+    } catch (error) {
+        console.error('Failed to load automation status:', error);
+    }
+}
+
+async function loadRules() {
+    try {
+        currentRules = await api.get('/api/automation/rules');
+        renderRules();
+    } catch (error) {
+        showNotification('Failed to load rules', 'danger');
+    }
+}
+
+function renderRules() {
+    const list = document.getElementById('rules-list');
+    const noRules = document.getElementById('no-rules');
+
+    if (currentRules.length === 0) {
+        noRules.classList.remove('hidden');
+        list.innerHTML = '';
+        return;
+    }
+
+    noRules.classList.add('hidden');
+    list.innerHTML = currentRules.map((rule, index) => `
+        <li class="rule-item ${rule.enabled ? '' : 'disabled'}" data-id="${rule.id}" draggable="true">
+            <span class="drag-handle" style="cursor: move; margin-right: 1rem;">&#9776;</span>
+            <div class="rule-info">
+                <div class="rule-name">
+                    ${rule.name}
+                    ${rule.enabled ? '' : '<span class="badge badge-secondary">Disabled</span>'}
+                </div>
+                <div class="rule-condition">
+                    If home power ${rule.operator} ${rule.threshold} kW, set reserve to ${rule.target_reserve}%
+                </div>
+            </div>
+            <div class="rule-actions">
+                <button class="btn btn-secondary btn-sm" onclick="editRule('${rule.id}')">Edit</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteRule('${rule.id}')">Delete</button>
+            </div>
+        </li>
+    `).join('');
+
+    // Setup drag and drop
+    setupDragDrop();
+}
+
+function setupDragDrop() {
+    const items = document.querySelectorAll('.rule-item');
+    let draggedItem = null;
+
+    items.forEach(item => {
+        item.addEventListener('dragstart', (e) => {
+            draggedItem = item;
+            item.style.opacity = '0.5';
+        });
+
+        item.addEventListener('dragend', (e) => {
+            item.style.opacity = '1';
+            draggedItem = null;
+        });
+
+        item.addEventListener('dragover', (e) => {
+            e.preventDefault();
+        });
+
+        item.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            if (draggedItem && draggedItem !== item) {
+                const list = document.getElementById('rules-list');
+                const items = Array.from(list.children);
+                const draggedIdx = items.indexOf(draggedItem);
+                const targetIdx = items.indexOf(item);
+
+                if (draggedIdx < targetIdx) {
+                    item.parentNode.insertBefore(draggedItem, item.nextSibling);
+                } else {
+                    item.parentNode.insertBefore(draggedItem, item);
+                }
+
+                // Save new order
+                const newOrder = Array.from(list.children).map(li => li.dataset.id);
+                await saveRuleOrder(newOrder);
+            }
+        });
+    });
+}
+
+async function saveRuleOrder(ruleIds) {
+    try {
+        await api.post('/api/automation/rules/reorder', { rule_ids: ruleIds });
+        await loadRules();
+    } catch (error) {
+        showNotification('Failed to save rule order', 'danger');
+    }
+}
+
+function showAddRuleModal() {
+    editingRuleId = null;
+    const template = document.getElementById('rule-modal-template').content.cloneNode(true);
+    const form = template.querySelector('#rule-form');
+
+    // Setup slider sync
+    const slider = form.querySelector('#rule-reserve-slider');
+    const input = form.querySelector('#rule-reserve');
+    slider.addEventListener('input', () => input.value = slider.value);
+    input.addEventListener('input', () => slider.value = input.value);
+
+    const { modal } = showModal('Add Rule', form.outerHTML, saveRule);
+
+    // Re-setup slider sync after modal creation
+    const modalSlider = modal.querySelector('#rule-reserve-slider');
+    const modalInput = modal.querySelector('#rule-reserve');
+    modalSlider.addEventListener('input', () => modalInput.value = modalSlider.value);
+    modalInput.addEventListener('input', () => modalSlider.value = modalInput.value);
+}
+
+function editRule(ruleId) {
+    const rule = currentRules.find(r => r.id === ruleId);
+    if (!rule) return;
+
+    editingRuleId = ruleId;
+
+    const template = document.getElementById('rule-modal-template').content.cloneNode(true);
+    const form = template.querySelector('#rule-form');
+
+    const { modal } = showModal('Edit Rule', form.outerHTML, saveRule);
+
+    // Populate form
+    modal.querySelector('#rule-name').value = rule.name;
+    modal.querySelector('#rule-operator').value = rule.operator;
+    modal.querySelector('#rule-threshold').value = rule.threshold;
+    modal.querySelector('#rule-reserve').value = rule.target_reserve;
+    modal.querySelector('#rule-reserve-slider').value = rule.target_reserve;
+    modal.querySelector('#rule-enabled').checked = rule.enabled;
+
+    // Setup slider sync
+    const slider = modal.querySelector('#rule-reserve-slider');
+    const input = modal.querySelector('#rule-reserve');
+    slider.addEventListener('input', () => input.value = slider.value);
+    input.addEventListener('input', () => slider.value = input.value);
+}
+
+async function saveRule() {
+    const name = document.querySelector('.modal #rule-name').value;
+    const operator = document.querySelector('.modal #rule-operator').value;
+    const threshold = parseFloat(document.querySelector('.modal #rule-threshold').value);
+    const target_reserve = parseFloat(document.querySelector('.modal #rule-reserve').value);
+    const enabled = document.querySelector('.modal #rule-enabled').checked;
+
+    if (!name || isNaN(threshold) || isNaN(target_reserve)) {
+        showNotification('Please fill in all fields', 'warning');
+        return;
+    }
+
+    const data = { name, operator, threshold, target_reserve, enabled };
+
+    try {
+        if (editingRuleId) {
+            await api.put(`/api/automation/rules/${editingRuleId}`, data);
+            showNotification('Rule updated', 'success');
+        } else {
+            await api.post('/api/automation/rules', data);
+            showNotification('Rule created', 'success');
+        }
+        await loadRules();
+    } catch (error) {
+        showNotification('Failed to save rule: ' + error.message, 'danger');
+    }
+}
+
+async function deleteRule(ruleId) {
+    if (!confirm('Are you sure you want to delete this rule?')) return;
+
+    try {
+        await api.delete(`/api/automation/rules/${ruleId}`);
+        showNotification('Rule deleted', 'success');
+        await loadRules();
+    } catch (error) {
+        showNotification('Failed to delete rule: ' + error.message, 'danger');
+    }
+}
+
+async function startAutomation() {
+    try {
+        await api.post('/api/automation/start');
+        showNotification('Automation started', 'success');
+        await loadAutomationStatus();
+    } catch (error) {
+        showNotification('Failed to start automation: ' + error.message, 'danger');
+    }
+}
+
+async function stopAutomation() {
+    try {
+        await api.post('/api/automation/stop');
+        showNotification('Automation stopped', 'success');
+        await loadAutomationStatus();
+    } catch (error) {
+        showNotification('Failed to stop automation: ' + error.message, 'danger');
+    }
+}
+</script>
+{% endblock %}

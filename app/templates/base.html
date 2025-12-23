@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Powerwall Controller{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="navbar-brand">Powerwall Controller</a>
+        <ul class="navbar-nav">
+            <li><a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Dashboard</a></li>
+            <li><a href="/configuration" class="{% if request.url.path == '/configuration' %}active{% endif %}">Configuration</a></li>
+            <li><a href="/automation" class="{% if request.url.path == '/automation' %}active{% endif %}">Automation</a></li>
+            <li><a href="/history" class="{% if request.url.path == '/history' %}active{% endif %}">History</a></li>
+            <li><a href="/audit" class="{% if request.url.path == '/audit' %}active{% endif %}">Audit Log</a></li>
+        </ul>
+        <div class="status-indicators">
+            <span id="status-powerwall">
+                <span class="status-dot disconnected" id="dot-powerwall"></span>
+                <span class="text-muted" style="color: white; font-size: 0.875rem;">Powerwall</span>
+            </span>
+            <span id="status-monitoring">
+                <span class="status-dot disconnected" id="dot-monitoring"></span>
+                <span class="text-muted" style="color: white; font-size: 0.875rem;">Monitoring</span>
+            </span>
+            <span id="status-automation">
+                <span class="status-dot disconnected" id="dot-automation"></span>
+                <span class="text-muted" style="color: white; font-size: 0.875rem;">Automation</span>
+            </span>
+        </div>
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <script src="/static/js/app.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

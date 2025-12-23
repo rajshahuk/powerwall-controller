@@ -1,0 +1,32 @@
+# Powerwall Controller Configuration
+
+# Web server settings
+server:
+  port: 9090
+  host: "0.0.0.0"
+
+# Powerwall connection settings
+powerwall:
+  # IP address or hostname of your Powerwall gateway
+  host: "192.168.1.100"
+  # Email used for Tesla account (for authentication)
+  email: "your-email@example.com"
+  # Password for the Powerwall gateway
+  password: "your-password"
+
+# Data storage settings
+storage:
+  # Directory to store parquet files
+  data_dir: "./data"
+
+# Monitoring settings
+monitoring:
+  # Sampling interval in seconds
+  interval: 5
+
+# Automation settings
+automation:
+  # Cooldown period in seconds between automation actions
+  cooldown: 30
+  # Window in seconds for calculating average usage
+  average_window: 20

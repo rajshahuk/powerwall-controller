@@ -1,0 +1,342 @@
+{% extends "base.html" %}
+
+{% block title %}History - Powerwall Controller{% endblock %}
+
+{% block content %}
+<!-- Time Range Selection -->
+<div class="card">
+    <div class="card-header">Time Range</div>
+    <div class="card-body">
+        <div class="form-row">
+            <div class="form-group">
+                <label class="form-label">Quick Select</label>
+                <div class="btn-group">
+                    <button class="btn btn-secondary" onclick="setTimeRange(1)">1 Hour</button>
+                    <button class="btn btn-secondary" onclick="setTimeRange(6)">6 Hours</button>
+                    <button class="btn btn-primary" onclick="setTimeRange(24)">24 Hours</button>
+                    <button class="btn btn-secondary" onclick="setTimeRange(48)">2 Days</button>
+                    <button class="btn btn-secondary" onclick="setTimeRange(168)">1 Week</button>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Custom Range</label>
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                    <input type="datetime-local" class="form-control" id="start-time">
+                    <span>to</span>
+                    <input type="datetime-local" class="form-control" id="end-time">
+                    <button class="btn btn-primary" onclick="loadCustomRange()">Load</button>
+                </div>
+            </div>
+        </div>
+        <div class="form-group mt-1">
+            <label class="form-label">
+                <input type="checkbox" id="show-events" checked onchange="toggleEvents()">
+                Show automation events on charts
+            </label>
+        </div>
+    </div>
+</div>
+
+<!-- Power Chart -->
+<div class="card">
+    <div class="card-header">Power Flow History</div>
+    <div class="card-body">
+        <div class="chart-container" style="height: 400px;">
+            <canvas id="power-history-chart"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- Battery Chart -->
+<div class="card">
+    <div class="card-header">Battery Level History</div>
+    <div class="card-body">
+        <div class="chart-container" style="height: 300px;">
+            <canvas id="battery-history-chart"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- Events List -->
+<div class="card" id="events-card">
+    <div class="card-header">Automation Events in Period</div>
+    <div class="card-body">
+        <div id="no-events" class="alert alert-info">No automation events in this time period.</div>
+        <table class="table hidden" id="events-table">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Action</th>
+                    <th>Details</th>
+                    <th>Change</th>
+                </tr>
+            </thead>
+            <tbody id="events-body">
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let powerHistoryChart, batteryHistoryChart;
+let currentEvents = [];
+let showEvents = true;
+
+document.addEventListener('DOMContentLoaded', async () => {
+    // Initialize charts
+    powerHistoryChart = new Chart(
+        document.getElementById('power-history-chart').getContext('2d'),
+        {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'Solar', data: [], borderColor: chartColors.solar, fill: false, tension: 0.2, pointRadius: 0 },
+                    { label: 'Battery', data: [], borderColor: chartColors.battery, fill: false, tension: 0.2, pointRadius: 0 },
+                    { label: 'Grid', data: [], borderColor: chartColors.grid, fill: false, tension: 0.2, pointRadius: 0 },
+                    { label: 'Home', data: [], borderColor: chartColors.home, fill: false, tension: 0.2, pointRadius: 0 },
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { display: true },
+                    y: { display: true, title: { display: true, text: 'kW' } }
+                },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            afterBody: function(context) {
+                                const dataIndex = context[0]?.dataIndex;
+                                return getEventTooltip('power-history-chart', dataIndex);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    );
+
+    batteryHistoryChart = new Chart(
+        document.getElementById('battery-history-chart').getContext('2d'),
+        {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'Battery %', data: [], borderColor: chartColors.battery, fill: true, backgroundColor: chartColors.battery + '30', tension: 0.2, pointRadius: 0 },
+                    { label: 'Reserve %', data: [], borderColor: chartColors.reserve, borderDash: [5, 5], fill: false, tension: 0.2, pointRadius: 0 },
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { display: true },
+                    y: { display: true, min: 0, max: 100, title: { display: true, text: '%' } }
+                },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            afterBody: function(context) {
+                                const dataIndex = context[0]?.dataIndex;
+                                return getEventTooltip('battery-history-chart', dataIndex);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    );
+
+    // Set default time range
+    setTimeRange(24);
+});
+
+function setTimeRange(hours) {
+    const end = new Date();
+    const start = new Date(end.getTime() - hours * 60 * 60 * 1000);
+
+    document.getElementById('start-time').value = formatDateTimeLocal(start);
+    document.getElementById('end-time').value = formatDateTimeLocal(end);
+
+    // Highlight active button
+    document.querySelectorAll('.btn-group .btn').forEach(btn => {
+        btn.classList.remove('btn-primary');
+        btn.classList.add('btn-secondary');
+    });
+    event.target.classList.remove('btn-secondary');
+    event.target.classList.add('btn-primary');
+
+    loadData(start, end);
+}
+
+function loadCustomRange() {
+    const start = new Date(document.getElementById('start-time').value);
+    const end = new Date(document.getElementById('end-time').value);
+
+    if (start >= end) {
+        showNotification('Start time must be before end time', 'warning');
+        return;
+    }
+
+    loadData(start, end);
+}
+
+async function loadData(start, end) {
+    try {
+        const [metrics, events] = await Promise.all([
+            api.get(`/api/history/metrics?start=${start.toISOString()}&end=${end.toISOString()}`),
+            api.get(`/api/history/events?start=${start.toISOString()}&end=${end.toISOString()}`)
+        ]);
+
+        currentEvents = events.filter(e => e.action === 'backup_reserve_changed');
+        updateCharts(metrics);
+        updateEventsTable();
+    } catch (error) {
+        showNotification('Failed to load history: ' + error.message, 'danger');
+    }
+}
+
+function updateCharts(metrics) {
+    if (!metrics.length) {
+        showNotification('No data available for this time range', 'info');
+        return;
+    }
+
+    // Downsample if too many points
+    const maxPoints = 500;
+    let data = metrics;
+    if (metrics.length > maxPoints) {
+        const step = Math.ceil(metrics.length / maxPoints);
+        data = metrics.filter((_, i) => i % step === 0);
+    }
+
+    const labels = data.map(m => formatDateTime(m.timestamp));
+    const solar = data.map(m => m.solar_power);
+    const battery = data.map(m => m.battery_power);
+    const grid = data.map(m => m.grid_power);
+    const home = data.map(m => m.home_power);
+    const batteryPct = data.map(m => m.battery_percentage);
+    const reserve = data.map(m => m.backup_reserve);
+
+    // Update power chart
+    powerHistoryChart.data.labels = labels;
+    powerHistoryChart.data.datasets[0].data = solar;
+    powerHistoryChart.data.datasets[1].data = battery;
+    powerHistoryChart.data.datasets[2].data = grid;
+    powerHistoryChart.data.datasets[3].data = home;
+
+    // Add event annotations if enabled
+    if (showEvents && currentEvents.length > 0) {
+        addEventAnnotations(powerHistoryChart, data);
+    }
+
+    powerHistoryChart.update();
+
+    // Update battery chart
+    batteryHistoryChart.data.labels = labels;
+    batteryHistoryChart.data.datasets[0].data = batteryPct;
+    batteryHistoryChart.data.datasets[1].data = reserve;
+
+    if (showEvents && currentEvents.length > 0) {
+        addEventAnnotations(batteryHistoryChart, data);
+    }
+
+    batteryHistoryChart.update();
+}
+
+// Store event indices for tooltip lookup
+let eventIndices = {};
+
+function addEventAnnotations(chart, metrics) {
+    // Reset event indices for this chart
+    const chartId = chart.canvas.id;
+    eventIndices[chartId] = {};
+
+    // Find indices closest to event times and only mark first dataset
+    currentEvents.forEach((event, i) => {
+        const eventTime = new Date(event.timestamp).getTime();
+        let closestIdx = 0;
+        let closestDiff = Infinity;
+
+        metrics.forEach((m, idx) => {
+            const diff = Math.abs(new Date(m.timestamp).getTime() - eventTime);
+            if (diff < closestDiff) {
+                closestDiff = diff;
+                closestIdx = idx;
+            }
+        });
+
+        // Mark the point only on the first dataset
+        if (closestDiff < 60000) { // Within 1 minute
+            const ds = chart.data.datasets[0];
+
+            if (!ds.pointRadius || typeof ds.pointRadius === 'number') {
+                ds.pointRadius = Array(chart.data.labels.length).fill(0);
+            }
+            if (!ds.pointBackgroundColor || typeof ds.pointBackgroundColor === 'string') {
+                ds.pointBackgroundColor = Array(chart.data.labels.length).fill(ds.borderColor);
+            }
+
+            ds.pointRadius[closestIdx] = 8;
+            ds.pointBackgroundColor[closestIdx] = 'red';
+
+            // Store event info for tooltip
+            eventIndices[chartId][closestIdx] = event;
+        }
+    });
+}
+
+function getEventTooltip(chartId, dataIndex) {
+    const event = eventIndices[chartId]?.[dataIndex];
+    if (event) {
+        return [
+            `Triggered by: ${event.triggered_by}`,
+            `${event.details}`,
+            `${event.old_value} → ${event.new_value}`
+        ];
+    }
+    return null;
+}
+
+function updateEventsTable() {
+    const noEvents = document.getElementById('no-events');
+    const table = document.getElementById('events-table');
+    const tbody = document.getElementById('events-body');
+
+    if (currentEvents.length === 0) {
+        noEvents.classList.remove('hidden');
+        table.classList.add('hidden');
+        return;
+    }
+
+    noEvents.classList.add('hidden');
+    table.classList.remove('hidden');
+
+    tbody.innerHTML = currentEvents.map(event => `
+        <tr>
+            <td>${formatDateTime(event.timestamp)}</td>
+            <td><span class="badge badge-info">${event.triggered_by}</span></td>
+            <td>${event.details}</td>
+            <td>${event.old_value} &rarr; ${event.new_value}</td>
+        </tr>
+    `).join('');
+}
+
+function toggleEvents() {
+    showEvents = document.getElementById('show-events').checked;
+    // Reload to refresh annotations
+    const start = new Date(document.getElementById('start-time').value);
+    const end = new Date(document.getElementById('end-time').value);
+    loadData(start, end);
+}
+
+function formatDateTimeLocal(date) {
+    return date.toISOString().slice(0, 16);
+}
+</script>
+{% endblock %}

@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block title %}Audit Log - Powerwall Controller{% endblock %}
+
+{% block content %}
+<!-- Filters -->
+<div class="card">
+    <div class="card-header">Filters</div>
+    <div class="card-body">
+        <div class="form-row">
+            <div class="form-group">
+                <label class="form-label">Time Range</label>
+                <div class="btn-group">
+                    <button class="btn btn-secondary" onclick="setDays(1)">1 Day</button>
+                    <button class="btn btn-primary" onclick="setDays(7)">7 Days</button>
+                    <button class="btn btn-secondary" onclick="setDays(30)">30 Days</button>
+                    <button class="btn btn-secondary" onclick="setDays(90)">90 Days</button>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Action Type</label>
+                <select class="form-control" id="action-filter" onchange="filterLogs()">
+                    <option value="">All Actions</option>
+                    <option value="backup_reserve_changed">Backup Reserve Changed</option>
+                    <option value="monitoring_started">Monitoring Started</option>
+                    <option value="monitoring_stopped">Monitoring Stopped</option>
+                    <option value="automation_started">Automation Started</option>
+                    <option value="automation_stopped">Automation Stopped</option>
+                    <option value="rule_created">Rule Created</option>
+                    <option value="rule_updated">Rule Updated</option>
+                    <option value="rule_deleted">Rule Deleted</option>
+                    <option value="config_updated">Config Updated</option>
+                    <option value="powerwall_connected">Powerwall Connected</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Triggered By</label>
+                <select class="form-control" id="triggered-filter" onchange="filterLogs()">
+                    <option value="">All Sources</option>
+                    <option value="user">User</option>
+                    <option value="automation">Automation</option>
+                    <option value="system">System</option>
+                </select>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Audit Log Table -->
+<div class="card">
+    <div class="card-header">
+        Audit Log
+        <span id="log-count" class="text-muted"></span>
+    </div>
+    <div class="card-body">
+        <div id="no-logs" class="alert alert-info hidden">No audit log entries found.</div>
+        <table class="table" id="audit-table">
+            <thead>
+                <tr>
+                    <th style="width: 180px;">Timestamp</th>
+                    <th style="width: 120px;">Source</th>
+                    <th style="width: 180px;">Action</th>
+                    <th>Details</th>
+                    <th style="width: 150px;">Change</th>
+                </tr>
+            </thead>
+            <tbody id="audit-body">
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allLogs = [];
+let currentDays = 7;
+
+document.addEventListener('DOMContentLoaded', async () => {
+    await loadLogs();
+});
+
+async function setDays(days) {
+    currentDays = days;
+
+    // Highlight active button
+    document.querySelectorAll('.btn-group .btn').forEach(btn => {
+        btn.classList.remove('btn-primary');
+        btn.classList.add('btn-secondary');
+    });
+    event.target.classList.remove('btn-secondary');
+    event.target.classList.add('btn-primary');
+
+    await loadLogs();
+}
+
+async function loadLogs() {
+    try {
+        allLogs = await api.get(`/api/audit?days=${currentDays}`);
+        filterLogs();
+    } catch (error) {
+        showNotification('Failed to load audit logs: ' + error.message, 'danger');
+    }
+}
+
+function filterLogs() {
+    const actionFilter = document.getElementById('action-filter').value;
+    const triggeredFilter = document.getElementById('triggered-filter').value;
+
+    let filtered = allLogs;
+
+    if (actionFilter) {
+        filtered = filtered.filter(log => log.action === actionFilter);
+    }
+
+    if (triggeredFilter) {
+        filtered = filtered.filter(log => log.triggered_by === triggeredFilter);
+    }
+
+    renderLogs(filtered);
+}
+
+function renderLogs(logs) {
+    const noLogs = document.getElementById('no-logs');
+    const table = document.getElementById('audit-table');
+    const tbody = document.getElementById('audit-body');
+    const count = document.getElementById('log-count');
+
+    count.textContent = `(${logs.length} entries)`;
+
+    if (logs.length === 0) {
+        noLogs.classList.remove('hidden');
+        table.classList.add('hidden');
+        return;
+    }
+
+    noLogs.classList.add('hidden');
+    table.classList.remove('hidden');
+
+    tbody.innerHTML = logs.map(log => `
+        <tr>
+            <td>${formatDateTime(log.timestamp)}</td>
+            <td>${getSourceBadge(log.triggered_by)}</td>
+            <td>${getActionBadge(log.action)}</td>
+            <td>${log.details}</td>
+            <td>${formatChange(log.old_value, log.new_value)}</td>
+        </tr>
+    `).join('');
+}
+
+function getSourceBadge(source) {
+    const badges = {
+        'user': '<span class="badge badge-info">User</span>',
+        'automation': '<span class="badge badge-warning">Automation</span>',
+        'system': '<span class="badge badge-secondary">System</span>',
+    };
+    return badges[source] || `<span class="badge badge-secondary">${source}</span>`;
+}
+
+function getActionBadge(action) {
+    const colors = {
+        'backup_reserve_changed': 'success',
+        'monitoring_started': 'info',
+        'monitoring_stopped': 'secondary',
+        'automation_started': 'info',
+        'automation_stopped': 'secondary',
+        'rule_created': 'success',
+        'rule_updated': 'warning',
+        'rule_deleted': 'danger',
+        'config_updated': 'warning',
+        'powerwall_connected': 'success',
+        'monitoring_error': 'danger',
+        'automation_error': 'danger',
+    };
+
+    const color = colors[action] || 'secondary';
+    const label = action.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+
+    return `<span class="badge badge-${color}">${label}</span>`;
+}
+
+function formatChange(oldValue, newValue) {
+    if (!oldValue && !newValue) return '-';
+    if (!oldValue) return `&rarr; ${newValue}`;
+    if (!newValue) return `${oldValue} &rarr;`;
+    return `${oldValue} &rarr; ${newValue}`;
+}
+</script>
+{% endblock %}
