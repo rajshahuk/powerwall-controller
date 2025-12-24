@@ -1,0 +1,21 @@
+services:
+  powerwall-controller:
+    build: .
+    ports:
+      - "9090:9090"
+    volumes:
+      - type: bind
+        source: ./config.yaml
+        target: /app/config.yaml
+      - type: bind
+        source: ./data
+        target: /app/data
+      - type: bind
+        source: ./.pypowerwall.auth
+        target: /app/.pypowerwall.auth
+        read_only: true
+      - type: bind
+        source: ./.pypowerwall.site
+        target: /app/.pypowerwall.site
+        read_only: true
+    restart: unless-stopped

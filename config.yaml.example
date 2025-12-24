@@ -1,0 +1,22 @@
+server:
+  host: 0.0.0.0
+  port: 9090
+
+powerwall:
+  mode: cloud  # local, fleetapi, cloud, or tedapi
+  email: your-email@example.com
+  password: ""  # Only needed for local mode
+  host: ""  # Only needed for local/tedapi modes
+  gw_password: ""  # Only needed for tedapi mode
+  timezone: America/Los_Angeles
+
+storage:
+  data_dir: ./data
+
+monitoring:
+  interval: 5
+
+automation:
+  cooldown: 30
+  average_window: 20
+  rules: []
