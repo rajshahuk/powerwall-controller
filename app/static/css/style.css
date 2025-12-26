@@ -397,18 +397,28 @@ body {
 
 /* Power flow diagram */
 .power-flow {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 2rem;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.5rem;
     padding: 2rem;
+    max-width: 700px;
+    margin: 0 auto;
+}
+
+@media (max-width: 600px) {
+    .power-flow {
+        grid-template-columns: repeat(2, 1fr);
+    }
 }
 
 .power-node {
     text-align: center;
     padding: 1.5rem;
     border-radius: 8px;
-    min-width: 120px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-height: 120px;
 }
 
 .power-node.solar {
@@ -421,7 +431,7 @@ body {
     border: 2px solid var(--battery-color);
 }
 
-.power-node.grid {
+.power-node.utility {
     background-color: rgba(108, 117, 125, 0.1);
     border: 2px solid var(--grid-color);
 }
