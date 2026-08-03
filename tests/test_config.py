@@ -1,5 +1,6 @@
 """Tests for configuration management."""
 
+import json
 import pytest
 from pathlib import Path
 
@@ -76,14 +77,22 @@ class TestIsConfigured:
         config.powerwall_password = "secret"
         assert config.is_configured() is True
 
-    def test_fleetapi_mode_requires_email(self, config: Config):
-        """FleetAPI mode only requires email."""
+    def test_fleetapi_mode_requires_oauth_tokens(self, config: Config, temp_dir: Path):
+        """FleetAPI mode requires a completed OAuth exchange (access + refresh token in the cache file)."""
+        config._config["storage"] = {"data_dir": str(temp_dir)}
         config.powerwall_mode = "fleetapi"
-        config.powerwall_email = ""
 
-        assert config.is_configured() is False
+        assert config.is_configured() is False  # no cache file yet
 
-        config.powerwall_email = "test@example.com"
+        cache_file = temp_dir / ".pypowerwall.fleetapi"
+        cache_file.write_text(json.dumps({"CLIENT_ID": "abc123"}))
+        assert config.is_configured() is False  # credentials saved, but no tokens yet
+
+        cache_file.write_text(json.dumps({
+            "CLIENT_ID": "abc123",
+            "access_token": "at",
+            "refresh_token": "rt",
+        }))
         assert config.is_configured() is True
 
     def test_cloud_mode_requires_email(self, config: Config):

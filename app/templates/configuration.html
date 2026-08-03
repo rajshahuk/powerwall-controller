@@ -25,8 +25,8 @@
                     Requires the gateway IP, your Tesla account email, and password.
                 </div>
                 <div id="mode-desc-fleetapi" class="alert alert-info mb-2 mode-desc hidden">
-                    <strong>FleetAPI Mode:</strong> Official Tesla API. Requires initial setup via command line:
-                    <code>python -m pypowerwall fleetapi</code>. After setup, only email is needed.
+                    <strong>FleetAPI Mode:</strong> Official Tesla API using OAuth. Set up your Tesla Developer app
+                    credentials and connect your account in the "Tesla FleetAPI Setup" card below.
                 </div>
                 <div id="mode-desc-cloud" class="alert alert-info mb-2 mode-desc hidden">
                     <strong>Cloud Mode:</strong> Unofficial Tesla Owners API. Requires initial setup via command line:
@@ -108,6 +108,90 @@
     </div>
 </div>
 
+<!-- Tesla FleetAPI Setup -->
+<div class="card hidden" id="fleetapi-setup-card">
+    <div class="card-header">Tesla FleetAPI Setup</div>
+    <div class="card-body">
+        <p class="text-muted mb-2">
+            Requires an app registered at
+            <a href="https://developer.tesla.com/" target="_blank" rel="noopener">developer.tesla.com</a>
+            and a domain you control, with your public key hosted at the URL shown below.
+        </p>
+
+        <form id="fleetapi-creds-form" onsubmit="saveFleetApiCredentials(event)">
+            <div class="form-group">
+                <label class="form-label" for="fleetapi-client-id">Client ID</label>
+                <input type="text" class="form-control" id="fleetapi-client-id">
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="fleetapi-client-secret">Client Secret</label>
+                <input type="password" class="form-control" id="fleetapi-client-secret">
+                <small class="text-muted">Leave blank to keep existing</small>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="fleetapi-domain">Domain</label>
+                <input type="text" class="form-control" id="fleetapi-domain" placeholder="example.com"
+                       oninput="updateFleetApiDerivedFields()">
+                <small class="text-muted">Must serve <code id="fleetapi-pem-url">https://example.com/.well-known/appspecific/com.tesla.3p.public-key.pem</code></small>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="fleetapi-redirect-uri">Redirect URI</label>
+                <input type="text" class="form-control" id="fleetapi-redirect-uri" placeholder="https://example.com/api/fleetapi/callback"
+                       oninput="this.dataset.userEdited = '1'">
+                <small class="text-muted">Must be registered in your Tesla Developer app and reachable from your browser</small>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="fleetapi-region">Region</label>
+                <select class="form-control" id="fleetapi-region">
+                    <option value="https://fleet-api.prd.na.vn.cloud.tesla.com">North America, Asia-Pacific</option>
+                    <option value="https://fleet-api.prd.eu.vn.cloud.tesla.com">Europe, Middle East, Africa</option>
+                    <option value="https://fleet-api.prd.cn.vn.cloud.tesla.cn">China</option>
+                </select>
+            </div>
+            <div class="btn-group">
+                <button type="submit" class="btn btn-primary">Save Credentials</button>
+            </div>
+        </form>
+
+        <hr class="mt-2 mb-2">
+
+        <ul class="diagnostic-steps">
+            <li class="diagnostic-step" id="fleetapi-step-credentials">
+                <span class="icon">&#10008;</span>
+                <span class="name"><strong>Credentials saved</strong></span>
+            </li>
+            <li class="diagnostic-step" id="fleetapi-step-partner">
+                <span class="icon">&#10008;</span>
+                <span class="name"><strong>Partner account registered</strong></span>
+            </li>
+            <li class="diagnostic-step" id="fleetapi-step-connected">
+                <span class="icon">&#10008;</span>
+                <span class="name"><strong>Tesla account connected</strong></span>
+                <span class="message" id="fleetapi-site-id"></span>
+            </li>
+        </ul>
+
+        <div class="btn-group mt-2">
+            <button type="button" class="btn btn-secondary" id="btn-fleetapi-register" onclick="registerFleetApiPartner()">
+                1. Register Partner Account
+            </button>
+            <a class="btn btn-primary" id="btn-fleetapi-connect" href="/api/fleetapi/authorize">
+                2. Connect with Tesla
+            </a>
+        </div>
+
+        <p class="text-muted mt-2 mb-1">
+            If Tesla redirected you to <code>pypowerwall.com/code</code> (or your Redirect URI otherwise
+            isn't routed back into this app) instead of coming back here automatically, paste the code
+            shown there below.
+        </p>
+        <form class="form-group" style="display: flex; gap: 0.5rem;" onsubmit="submitFleetApiManualCode(event)">
+            <input type="text" class="form-control" id="fleetapi-manual-code" placeholder="Paste authorization code">
+            <button type="submit" class="btn btn-secondary">Submit Code</button>
+        </form>
+    </div>
+</div>
+
 <!-- Current Settings -->
 <div class="card">
     <div class="card-header">Current Settings</div>
@@ -144,9 +228,8 @@
     <div class="card-header">Setup Instructions for Cloud Modes</div>
     <div class="card-body">
         <h4>FleetAPI Setup (Official Tesla API)</h4>
-        <p class="text-muted">Requires a Tesla Developer account and domain verification.</p>
-        <pre style="background: #f5f5f5; padding: 1rem; border-radius: 4px;">source venv/bin/activate
-python -m pypowerwall fleetapi</pre>
+        <p class="text-muted">Select FleetAPI mode above and use the "Tesla FleetAPI Setup" card to register your
+        Tesla Developer app credentials and connect your account - no command line needed.</p>
 
         <h4 class="mt-2">Cloud Mode Setup (Tesla Owners API)</h4>
         <p class="text-muted">Uses unofficial API, easier to set up but may be less stable.</p>
@@ -163,6 +246,7 @@ python -m pypowerwall setup</pre>
 document.addEventListener('DOMContentLoaded', async () => {
     await loadConfig();
     updateFieldVisibility();
+    handleFleetApiRedirectParams();
 });
 
 function updateFieldVisibility() {
@@ -178,6 +262,9 @@ function updateFieldVisibility() {
     const teslaCredsField = document.getElementById('field-tesla-creds');
     const passwordField = document.getElementById('field-password');
     const hostHint = document.getElementById('host-hint');
+    const fleetApiCard = document.getElementById('fleetapi-setup-card');
+
+    fleetApiCard.classList.add('hidden');
 
     if (mode === 'local') {
         hostField.classList.remove('hidden');
@@ -190,6 +277,10 @@ function updateFieldVisibility() {
         gwPasswordField.classList.add('hidden');
         teslaCredsField.classList.remove('hidden');
         passwordField.classList.add('hidden');
+        if (mode === 'fleetapi') {
+            fleetApiCard.classList.remove('hidden');
+            loadFleetApiStatus();
+        }
     } else if (mode === 'tedapi') {
         hostField.classList.remove('hidden');
         gwPasswordField.classList.remove('hidden');
@@ -197,6 +288,125 @@ function updateFieldVisibility() {
         document.getElementById('host').placeholder = '192.168.91.1';
         hostHint.textContent = 'Usually 192.168.91.1 (TEDAPI endpoint)';
     }
+}
+
+function updateFleetApiDerivedFields() {
+    const domain = document.getElementById('fleetapi-domain').value.trim() || 'example.com';
+    document.getElementById('fleetapi-pem-url').textContent =
+        `https://${domain}/.well-known/appspecific/com.tesla.3p.public-key.pem`;
+
+    const redirectField = document.getElementById('fleetapi-redirect-uri');
+    if (!redirectField.dataset.userEdited) {
+        redirectField.value = `https://${domain}/api/fleetapi/callback`;
+    }
+}
+
+function setDiagnosticStep(id, done) {
+    const el = document.getElementById(id);
+    el.classList.toggle('success', done);
+    el.classList.toggle('pending', !done);
+    el.querySelector('.icon').innerHTML = done ? '&#10004;' : '&#10008;';
+}
+
+async function loadFleetApiStatus() {
+    try {
+        const status = await api.get('/api/fleetapi/status');
+
+        if (status.client_id) document.getElementById('fleetapi-client-id').value = status.client_id;
+        if (status.domain) document.getElementById('fleetapi-domain').value = status.domain;
+        if (status.redirect_uri) {
+            const redirectField = document.getElementById('fleetapi-redirect-uri');
+            redirectField.value = status.redirect_uri;
+            redirectField.dataset.userEdited = '1';
+        }
+        if (status.audience) document.getElementById('fleetapi-region').value = status.audience;
+        if (status.has_client_secret) {
+            document.getElementById('fleetapi-client-secret').placeholder = 'Saved (leave blank to keep)';
+        }
+        updateFleetApiDerivedFields();
+
+        setDiagnosticStep('fleetapi-step-credentials', status.credentials_saved);
+        setDiagnosticStep('fleetapi-step-partner', status.partner_registered);
+        setDiagnosticStep('fleetapi-step-connected', status.connected);
+        document.getElementById('fleetapi-site-id').textContent =
+            status.connected && status.site_id ? `Site ID: ${status.site_id}` : '';
+
+        document.getElementById('btn-fleetapi-register').disabled = !status.credentials_saved;
+    } catch (error) {
+        showNotification('Failed to load FleetAPI status: ' + error.message, 'danger');
+    }
+}
+
+async function saveFleetApiCredentials(event) {
+    event.preventDefault();
+
+    const data = {
+        client_id: document.getElementById('fleetapi-client-id').value.trim(),
+        domain: document.getElementById('fleetapi-domain').value.trim(),
+        redirect_uri: document.getElementById('fleetapi-redirect-uri').value.trim() || null,
+        audience: document.getElementById('fleetapi-region').value,
+    };
+
+    const clientSecret = document.getElementById('fleetapi-client-secret').value;
+    if (clientSecret) {
+        data.client_secret = clientSecret;
+    }
+
+    try {
+        await api.post('/api/fleetapi/credentials', data);
+        showNotification('FleetAPI credentials saved', 'success');
+        document.getElementById('fleetapi-client-secret').value = '';
+        await loadFleetApiStatus();
+    } catch (error) {
+        showNotification('Failed to save FleetAPI credentials: ' + error.message, 'danger');
+    }
+}
+
+async function registerFleetApiPartner() {
+    const btn = document.getElementById('btn-fleetapi-register');
+    btn.disabled = true;
+    try {
+        await api.post('/api/fleetapi/register-partner');
+        showNotification('Partner account registered', 'success');
+        await loadFleetApiStatus();
+    } catch (error) {
+        showNotification('Partner registration failed: ' + error.message, 'danger');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function submitFleetApiManualCode(event) {
+    event.preventDefault();
+    const input = document.getElementById('fleetapi-manual-code');
+    let code = input.value.trim();
+    if (code.startsWith('http')) {
+        const match = code.match(/[?&]code=([^&]+)/);
+        if (match) code = decodeURIComponent(match[1]);
+    }
+    if (!code) return;
+
+    try {
+        await api.post('/api/fleetapi/manual-code', { code });
+        showNotification('Tesla account connected', 'success');
+        input.value = '';
+        await loadFleetApiStatus();
+    } catch (error) {
+        showNotification('Failed to connect: ' + error.message, 'danger');
+    }
+}
+
+function handleFleetApiRedirectParams() {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('fleetapi_connected')) {
+        showNotification('Tesla account connected', 'success');
+        loadFleetApiStatus();
+    } else if (params.has('fleetapi_error')) {
+        showNotification('Tesla connection failed: ' + params.get('fleetapi_error'), 'danger');
+    } else {
+        return;
+    }
+    window.history.replaceState({}, '', window.location.pathname);
 }
 
 async function loadConfig() {

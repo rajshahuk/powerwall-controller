@@ -70,13 +70,15 @@ class PowerwallService:
 
         elif mode == MODE_FLEETAPI:
             # Mode 2: Official Tesla Fleet API (cloud)
+            # authpath must match fleetapi_setup_service's cache file location
             return pypowerwall.Powerwall(
                 host="",
                 password="",
                 email=email,
                 timezone=timezone,
                 fleetapi=True,
-                auto_select=True
+                auto_select=True,
+                authpath=str(config.data_dir)
             )
 
         elif mode == MODE_CLOUD:

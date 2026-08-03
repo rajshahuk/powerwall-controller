@@ -52,31 +52,31 @@ app.include_router(api_router)
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     """Dashboard page."""
-    return templates.TemplateResponse("dashboard.html", {"request": request})
+    return templates.TemplateResponse(request, "dashboard.html")
 
 
 @app.get("/configuration", response_class=HTMLResponse)
 async def configuration(request: Request):
     """Configuration page."""
-    return templates.TemplateResponse("configuration.html", {"request": request})
+    return templates.TemplateResponse(request, "configuration.html")
 
 
 @app.get("/automation", response_class=HTMLResponse)
 async def automation(request: Request):
     """Automation page."""
-    return templates.TemplateResponse("automation.html", {"request": request})
+    return templates.TemplateResponse(request, "automation.html")
 
 
 @app.get("/history", response_class=HTMLResponse)
 async def history(request: Request):
     """History page."""
-    return templates.TemplateResponse("history.html", {"request": request})
+    return templates.TemplateResponse(request, "history.html")
 
 
 @app.get("/audit", response_class=HTMLResponse)
 async def audit(request: Request):
     """Audit log page."""
-    return templates.TemplateResponse("audit.html", {"request": request})
+    return templates.TemplateResponse(request, "audit.html")
 
 
 def run():

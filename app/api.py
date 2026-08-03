@@ -1,8 +1,10 @@
 """FastAPI API routes for Powerwall Controller."""
 
+import urllib.parse
 from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from app.config import config
@@ -10,6 +12,7 @@ from app.services.powerwall_service import powerwall_service
 from app.services.storage_service import storage_service
 from app.services.monitoring_service import monitoring_service
 from app.services.automation_service import automation_service, AutomationRule, RuleOperator
+from app.services.fleetapi_setup_service import fleetapi_setup_service
 
 router = APIRouter(prefix="/api")
 
@@ -46,6 +49,18 @@ class RuleReorder(BaseModel):
 
 class BackupReserveSet(BaseModel):
     percentage: float
+
+
+class FleetApiCredentials(BaseModel):
+    client_id: str
+    client_secret: Optional[str] = None
+    domain: str
+    redirect_uri: Optional[str] = None
+    audience: Optional[str] = None
+
+
+class FleetApiManualCode(BaseModel):
+    code: str
 
 
 # Status endpoints
@@ -103,6 +118,94 @@ async def update_config(update: ConfigUpdate):
     )
 
     return {"success": True}
+
+
+# FleetAPI OAuth setup endpoints
+@router.get("/fleetapi/status")
+async def fleetapi_status():
+    """Get Tesla FleetAPI onboarding status."""
+    status = fleetapi_setup_service.get_status()
+    return {
+        "credentials_saved": status.credentials_saved,
+        "pem_url": status.pem_url,
+        "partner_registered": status.partner_registered,
+        "connected": status.connected,
+        "site_id": status.site_id,
+        "client_id": status.client_id,
+        "domain": status.domain,
+        "redirect_uri": status.redirect_uri,
+        "audience": status.audience,
+        "has_client_secret": status.has_client_secret,
+    }
+
+
+@router.post("/fleetapi/credentials")
+async def fleetapi_save_credentials(creds: FleetApiCredentials):
+    """Save Tesla Developer app credentials for FleetAPI."""
+    try:
+        fleetapi_setup_service.save_credentials(
+            creds.client_id, creds.client_secret, creds.domain,
+            creds.redirect_uri, creds.audience
+        )
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/fleetapi/register-partner")
+async def fleetapi_register_partner():
+    """Verify hosted PEM key and register the partner account with Tesla."""
+    try:
+        fleetapi_setup_service.register_partner()
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/fleetapi/authorize")
+async def fleetapi_authorize():
+    """Redirect to Tesla's OAuth login to authorize this app."""
+    try:
+        url = fleetapi_setup_service.build_authorize_url()
+        return RedirectResponse(url)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/fleetapi/callback")
+async def fleetapi_callback(code: Optional[str] = None, state: Optional[str] = None,
+                             error: Optional[str] = None):
+    """OAuth callback - Tesla redirects here with the authorization code."""
+    if error:
+        return RedirectResponse(f"/configuration?fleetapi_error={error}")
+    if not code or not state:
+        return RedirectResponse("/configuration?fleetapi_error=missing_code")
+    try:
+        fleetapi_setup_service.exchange_code(code, state)
+        await storage_service.store_audit(
+            action="fleetapi_connected",
+            details="Connected Tesla FleetAPI via OAuth",
+            triggered_by="user"
+        )
+        return RedirectResponse("/configuration?fleetapi_connected=1")
+    except Exception as e:
+        return RedirectResponse(f"/configuration?fleetapi_error={urllib.parse.quote(str(e))}")
+
+
+@router.post("/fleetapi/manual-code")
+async def fleetapi_manual_code(data: FleetApiManualCode):
+    """Redeem an authorization code pasted by hand (e.g. from https://pypowerwall.com/code),
+    for setups where the redirect URI isn't routed back into this app."""
+    try:
+        fleetapi_setup_service.exchange_code_manual(data.code)
+        await storage_service.store_audit(
+            action="fleetapi_connected",
+            details="Connected Tesla FleetAPI via manually-entered code",
+            triggered_by="user"
+        )
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # Connection endpoints

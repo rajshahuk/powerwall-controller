@@ -1,5 +1,6 @@
 """Configuration management for Powerwall Controller."""
 
+import json
 import os
 from pathlib import Path
 from typing import Optional
@@ -160,8 +161,21 @@ class Config:
         if mode == "local":
             # Local mode needs host, email, and password
             return bool(self.powerwall_host and self.powerwall_email and self.powerwall_password)
-        elif mode == "fleetapi" or mode == "cloud":
-            # Cloud modes only need email (credentials cached from setup)
+        elif mode == "fleetapi":
+            # FleetAPI needs OAuth tokens obtained via the Connect with Tesla flow.
+            # Credentials/tokens live in data_dir/.pypowerwall.fleetapi (managed by
+            # fleetapi_setup_service), not in this YAML config.
+            cache_file = self.data_dir / ".pypowerwall.fleetapi"
+            if not cache_file.exists():
+                return False
+            try:
+                with open(cache_file, "r") as f:
+                    cache = json.load(f)
+            except (OSError, ValueError):
+                return False
+            return bool(cache.get("access_token") and cache.get("refresh_token"))
+        elif mode == "cloud":
+            # Cloud mode only needs email (credentials cached from setup)
             return bool(self.powerwall_email)
         elif mode == "tedapi":
             # TEDAPI needs gateway password
